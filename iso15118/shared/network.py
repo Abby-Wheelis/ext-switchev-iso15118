@@ -101,11 +101,10 @@ async def _get_full_ipv6_address(host: str, port: int) -> Tuple[str, int, int, i
     )
     # We only need the socket_address here
     _, _, _, _, socket_address = addr_info_list[0]
-    return socket_address
+    return socket_address  # type: ignore[return-value]
 
 
 def validate_nic(nic: str) -> None:
-
     """
     Checks if the Network Interface Card (NIC) provided exists on the system
     and contains a link-local address

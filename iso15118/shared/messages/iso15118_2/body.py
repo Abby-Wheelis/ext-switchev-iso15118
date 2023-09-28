@@ -9,6 +9,7 @@ Pydantic's Field class is used to be able to create a json schema of each model
 (or class) that matches the definitions in the XSD schema, including the XSD
 element names by using the 'alias' attribute.
 """
+
 import logging
 from abc import ABC
 from typing import Optional, Tuple, Type
@@ -734,7 +735,7 @@ def get_msg_type(msg_name: str) -> Optional[Type[BodyBase]]:
 
     Returns: The message type corresponding to the given message name
     """
-    msg_dict = {
+    msg_dict: dict[str, Type[BodyBase]] = {
         "SessionSetupReq": SessionSetupReq,
         "SessionSetupRes": SessionSetupRes,
         "ServiceDiscoveryReq": ServiceDiscoveryReq,

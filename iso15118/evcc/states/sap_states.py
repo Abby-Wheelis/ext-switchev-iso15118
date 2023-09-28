@@ -76,7 +76,9 @@ class SupportedAppProtocol(StateEVCC):
         ],
         message_exi: bytes = None,
     ):
-        msg = self.check_msg(message, SupportedAppProtocolRes, SupportedAppProtocolRes)
+        msg: SupportedAppProtocolRes = self.check_msg(
+            message, SupportedAppProtocolRes, SupportedAppProtocolRes
+        )
         if not msg:
             return
 
@@ -100,7 +102,7 @@ class SupportedAppProtocol(StateEVCC):
         ] = ISOV2PayloadTypes.EXI_ENCODED
         match = False
 
-        for protocol in self.comm_session.supported_protocols:
+        for protocol in self.comm_session.supported_app_protocols:
             if protocol.schema_id == sap_res.schema_id:
                 match = True
                 if protocol.protocol_ns == Protocol.ISO_15118_2.ns.value:
@@ -126,7 +128,7 @@ class SupportedAppProtocol(StateEVCC):
                         protocol.protocol_ns
                     )
                     header = MessageHeaderV20(
-                        session_id=self.get_session_id(), timestamp=time.time()
+                        session_id=self.get_session_id(length=8), timestamp=time.time()
                     )
                     next_msg = SessionSetupReqV20(
                         header=header,
@@ -168,17 +170,22 @@ class SupportedAppProtocol(StateEVCC):
             f"ID '{sap_res.schema_id}'"
         )
 
-    def get_session_id(self) -> str:
+    def get_session_id(self, length=1) -> str:
         """
         Check if there's a saved session ID from a previously paused charging
         session and applies that for the now resumed charging session.
-        If there's no stored session ID, we'll set the session ID equal to zero.
+        If there's no stored session ID, we'll set the session ID equal to zero
+        with the specified length in bytes.
         The session ID is also stored as a comm session variable.
         """
         if evcc_settings.ev_session_context.session_id:
             self.comm_session.session_id = evcc_settings.ev_session_context.session_id
             evcc_settings.ev_session_context.session_id = None
         else:
-            self.comm_session.session_id = bytes(1).hex().upper()
+            self.comm_session.session_id = bytes(length).hex().upper()
+            # Reset whole ev_session_context
+            evcc_settings.ev_session_context.selected_auth_option = None
+            evcc_settings.ev_session_context.requested_energy_mode = None
+            evcc_settings.ev_session_context.selected_energy_service = None
 
         return self.comm_session.session_id

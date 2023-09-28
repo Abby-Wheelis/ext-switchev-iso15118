@@ -12,7 +12,8 @@ DEFAULT_TARGET_VOLTAGE_V = 200
 @dataclass
 class EVState:
     # Common
-    PaymentOption: str = ''
+    EAmount: int = 60
+    DepartureTime: int = 7200
     EnergyTransferMode: str = ''
     StopCharging = False
     Pause = False
@@ -24,6 +25,15 @@ class EVState:
     dc_energy_capacity: float = DEFAULT_ENERGY_CAPACITY_WH
     dc_target_current: float = DEFAULT_TARGET_CURRENT_A
     dc_target_voltage: float = DEFAULT_TARGET_VOLTAGE_V
+
+    # DC BPT
+    dc_discharge_max_current_limit: float = 0
+    dc_discharge_max_power_limit: float = 0
+    dc_discharge_target_current: float = 0
+
+    # SAE J2847/2
+    SAEJ2847_V2H_V2G_Active = False
+    minimal_soc = 20
 
     def reset(self):
         self.StopCharging = False

@@ -10,9 +10,10 @@ Pydantic's Field class is used to be able to create a json schema of each model
 (or class) that matches the definitions in the XSD schema, including the XSD
 element names by using the 'alias' attribute.
 """
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
+from typing import List, Tuple
 
 from pydantic import Field, root_validator, validator
 
@@ -43,7 +44,10 @@ from iso15118.shared.messages.iso15118_20.common_types import (
     V2GRequest,
     V2GResponse,
 )
-from iso15118.shared.validators import one_field_must_be_set
+from iso15118.shared.validators import (
+    one_field_must_be_set,
+    one_field_must_be_set_or_none,
+)
 
 
 class ECDHCurve(str, Enum):
@@ -620,7 +624,7 @@ class PriceRule(BaseModel):
     """See section 8.3.5.3.54 in ISO 15118-20"""
 
     energy_fee: RationalNumber = Field(..., alias="EnergyFee")
-    parking_fee: RationalNumber = Field(None, alias="EnergyFee")
+    parking_fee: RationalNumber = Field(None, alias="ParkingFee")
     parking_fee_period: int = Field(None, le=UINT_32_MAX, alias="ParkingFeePeriod")
     carbon_dioxide_emission: int = Field(
         None, le=UINT_16_MAX, alias="CarbonDioxideEmission"
@@ -684,6 +688,9 @@ class AdditionalServiceList(BaseModel):
 class AbsolutePriceSchedule(PriceSchedule):
     """See section 8.3.5.3.45 in ISO 15118-20"""
 
+    # 'Id' is actually an XML attribute, but JSON (our serialisation method)
+    # doesn't have attributes. The EXI codec has to en-/decode accordingly.
+    id: str = Field(None, alias="Id")
     currency: str = Field(..., max_length=3, alias="Currency")
     language: str = Field(..., max_length=3, alias="Language")
     price_algorithm: str = Field(..., max_length=255, alias="PriceAlgorithm")
@@ -709,16 +716,15 @@ class ChargingSchedule(BaseModel):
     @root_validator(pre=True)
     def either_price_levels_or_absolute_prices(cls, values):
         """
-        Either price_level_schedule or absolute_price_schedule must be set,
+        Either price_level_schedule, absolute_price_schedule or none must be set,
         depending on whether abstract price levels or absolute prices are used
         to indicate costs for the charging session.
-
         Pydantic validators are "class methods",
         see https://pydantic-docs.helpmanual.io/usage/validators/
         """
         # pylint: disable=no-self-argument
         # pylint: disable=no-self-use
-        if one_field_must_be_set(
+        if one_field_must_be_set_or_none(
             [
                 "price_level_schedule",
                 "PriceLevelSchedule",
@@ -726,7 +732,6 @@ class ChargingSchedule(BaseModel):
                 "AbsolutePriceSchedule",
             ],
             values,
-            True,
         ):
             return values
 
@@ -746,16 +751,15 @@ class DischargingSchedule(BaseModel):
     @root_validator(pre=True)
     def either_price_levels_or_absolute_prices(cls, values):
         """
-        Either price_level_schedule or absolute_price_schedule must be set,
-        depending on abstract price levels or absolute prices are used to
-        indicate costs for the charging session.
-
+        Either price_level_schedule, absolute_price_schedule or none must be set,
+        depending on whether abstract price levels or absolute prices are used
+        to indicate costs for the charging session.
         Pydantic validators are "class methods",
         see https://pydantic-docs.helpmanual.io/usage/validators/
         """
         # pylint: disable=no-self-argument
         # pylint: disable=no-self-use
-        if one_field_must_be_set(
+        if one_field_must_be_set_or_none(
             [
                 "price_level_schedule",
                 "PriceLevelSchedule",
@@ -763,7 +767,6 @@ class DischargingSchedule(BaseModel):
                 "AbsolutePriceSchedule",
             ],
             values,
-            True,
         ):
             return values
 
@@ -820,30 +823,6 @@ class DynamicScheduleExchangeResParams(BaseModel):
             )
 
         return values
-
-    @root_validator(pre=True)
-    def either_price_levels_or_absolute_prices(cls, values):
-        """
-        Either price_level_schedule or absolute_price_schedule must be set,
-        depending on abstract price levels or absolute prices are used to
-        indicate costs for the charging session.
-
-        Pydantic validators are "class methods",
-        see https://pydantic-docs.helpmanual.io/usage/validators/
-        """
-        # pylint: disable=no-self-argument
-        # pylint: disable=no-self-use
-        if one_field_must_be_set(
-            [
-                "price_level_schedule",
-                "PriceLevelSchedule",
-                "absolute_price_schedule",
-                "AbsolutePriceSchedule",
-            ],
-            values,
-            True,
-        ):
-            return values
 
 
 class ScheduleExchangeRes(V2GResponse):
@@ -1295,8 +1274,8 @@ class MatchedService:
     is_free: bool
     parameter_sets: List[ParameterSet]
 
-    def service_parameter_set_ids(self) -> [(int, int)]:
-        service_param_set_ids: List[(int, int)] = []
+    def service_parameter_set_ids(self) -> List[Tuple[int, int]]:
+        service_param_set_ids: List[Tuple[int, int]] = []
         for parameter_set in self.parameter_sets:
             service_param_set_ids.append((self.service.id, parameter_set.id))
         return service_param_set_ids

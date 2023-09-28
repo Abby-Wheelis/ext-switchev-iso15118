@@ -63,11 +63,11 @@ class StopNotification(Notification):
     """
 
     def __init__(
-            self,
-            successful: bool,
-            reason: str,
-            peer_ip_address: str = None,
-            stop_action: SessionStopAction = SessionStopAction.TERMINATE,
+        self,
+        successful: bool,
+        reason: str,
+        peer_ip_address: str = None,
+        stop_action: SessionStopAction = SessionStopAction.TERMINATE,
     ):
         self.successful = successful
         self.reason = reason

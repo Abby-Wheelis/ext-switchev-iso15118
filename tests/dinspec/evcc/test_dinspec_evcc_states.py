@@ -15,6 +15,7 @@ from iso15118.evcc.states.din_spec_states import (
     PowerDelivery,
     ServiceDiscovery,
     ServicePaymentSelection,
+    SessionSetup,
     WeldingDetection,
 )
 from iso15118.shared.messages.enums import AuthEnum, EnergyTransferModeEnum, Protocol
@@ -32,6 +33,7 @@ from tests.dinspec.evcc.evcc_mock_messages import (
     get_service_discovery_message_payment_service_not_offered,
     get_service_payment_selection_fail_message,
     get_service_payment_selection_message,
+    get_session_setup_evseid_zero,
     get_v2g_message_current_demand_current_limit_not_achieved,
     get_welding_detection_on_going_message,
 )
@@ -59,7 +61,7 @@ class TestEvScenarios:
         self.comm_session_mock.selected_energy_mode = EnergyTransferModeEnum.DC_CORE
         self.comm_session_mock.selected_auth_option = AuthEnum.EIM_V2
         self.comm_session_mock.writer = MockWriter()
-        self.comm_session_mock.ongoing_timer: float = -1
+        self.comm_session_mock.ongoing_timer = -1
 
     @pytest.fixture(autouse=True)
     def _is_welding_detection_complete(self):
@@ -164,6 +166,11 @@ class TestEvScenarios:
             message=get_charge_parameter_discovery_on_going_message()
         )
         assert charge_parameter_discovery.next_state is Terminate
+
+    async def test_session_setup_to_service_discovery(self):
+        session_setup = SessionSetup(self.comm_session_mock)
+        await session_setup.process_message(message=get_session_setup_evseid_zero())
+        assert session_setup.next_state is ServiceDiscovery
 
     async def cable_check_req_to_pre_charge(self):
         pass

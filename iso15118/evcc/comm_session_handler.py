@@ -11,7 +11,7 @@ import asyncio
 import logging
 from asyncio.streams import StreamReader, StreamWriter
 from ipaddress import IPv6Address
-from typing import List, Optional, Tuple, Union
+from typing import Coroutine, List, Optional, Tuple, Union
 
 from pydantic.error_wrappers import ValidationError
 
@@ -34,6 +34,7 @@ from iso15118.shared.messages.app_protocol import AppProtocol, SupportedAppProto
 from iso15118.shared.messages.enums import (
     AuthEnum,
     DINPayloadTypes,
+    EnergyTransferModeEnum,
     ISOV2PayloadTypes,
     ISOV20PayloadTypes,
     Namespace,
@@ -107,12 +108,24 @@ class EVCCCommunicationSession(V2GCommunicationSession):
         self.service_details_to_request: List[int] = []
         # Protocols supported by the EVCC as sent to the SECC via
         # the SupportedAppProtocolReq message
-        self.supported_protocols: List[Protocol] = []
+        self.supported_app_protocols: List[AppProtocol] = []
         # The Ongoing timer (given in seconds) starts running once the EVCC
         # receives a response with the field EVSEProcessing set to 'Ongoing'.
         # Once the timer is up, the EV will terminate the communication session.
         # A value >= 0 means the timer is running, a value < 0 means it stopped.
         self.ongoing_timer: float = -1
+        # The Charge timer (in seconds) starts running once the EVCC
+        # receives a PowerDeliveryRes with EVSEProcessing set to 'Finished'.
+        # This timer counts up during a charge session, recording the duration.
+        # When a charge session is paused or stopped, the timer is reset.
+        # A value >= 0 means the timer is running, a value < 0 means it stopped.
+        self.charging_session_timer: float = -1
+        # The end of profile schedule marks the final departure time within
+        # the profile_entry_schedule created for a PowerDeliveryReq. This
+        # value, is used to mark when the 24 entry schedule has terminated.
+        # See ISO 15118-2 Subclause 8.5.2.10 for details
+        self.end_of_profile_schedule: int= -1
+        self.departure_time: int = -1
         # Temporarily save the ScheduleExchangeReq, which need to be resent to the SECC
         # if the response message's EVSEProcessing field is set to "Ongoing"
         self.ongoing_schedule_exchange_req: Optional[ScheduleExchangeReq] = None
@@ -138,8 +151,11 @@ class EVCCCommunicationSession(V2GCommunicationSession):
         # "Caching" authorization_req. (Required in ISO15118-20)
         # Avoids recomputing the signature, eim, pnc params during authorization loop.
         self.authorization_req_message: Optional[AuthorizationReq] = None
+        # The energy mode the EVCC selected (ISO 15118-2)
+        self.selected_energy_mode: Optional[EnergyTransferModeEnum] = None
+        self.is_tls = False
 
-        self.is_tls = self.config.use_tls
+        self.sae_j2847_active: int = 0
 
     def create_sap(self) -> Union[SupportedAppProtocolReq, None]:
         """
@@ -162,7 +178,7 @@ class EVCCCommunicationSession(V2GCommunicationSession):
         # Protocol equal to “TCP” and Security equal to “No transport layer security”
         # according to Table 23. Remove it from the supported protocols list if
         # use_tls is enabled
-        if self.config.use_tls:
+        if self.is_tls:
             try:
                 supported_protocols.remove(Protocol.DIN_SPEC_70121)
                 logger.warning(
@@ -189,17 +205,19 @@ class EVCCCommunicationSession(V2GCommunicationSession):
             priority += 1
             app_protocol_entry = AppProtocol(
                 protocol_ns=protocol.ns.value,
-                major_version=2
-                if protocol in [Protocol.ISO_15118_2, Protocol.DIN_SPEC_70121]
-                else 1,
+                major_version=(
+                    2
+                    if protocol in [Protocol.ISO_15118_2, Protocol.DIN_SPEC_70121]
+                    else 1
+                ),
                 minor_version=0,
                 schema_id=schema_id,
                 priority=priority,
             )
             app_protocols.append(app_protocol_entry)
 
-        self.supported_protocols = app_protocols
-        sap_req = SupportedAppProtocolReq(app_protocol=self.supported_protocols)
+        self.supported_app_protocols = app_protocols
+        sap_req = SupportedAppProtocolReq(app_protocol=self.supported_app_protocols)
 
         return sap_req
 
@@ -257,6 +275,7 @@ class EVCCCommunicationSession(V2GCommunicationSession):
         evcc_settings.ev_session_context.session_id = self.session_id
         evcc_settings.ev_session_context.selected_auth_option = self.selected_auth_option
         evcc_settings.ev_session_context.requested_energy_mode = self.selected_energy_mode
+        evcc_settings.ev_session_context.selected_energy_service = self.selected_energy_service
 
 class CommunicationSessionHandler:
     """
@@ -273,13 +292,13 @@ class CommunicationSessionHandler:
         codec: IEXICodec,
         ev_controller: EVControllerInterface,
     ):
-        self.list_of_tasks = []
-        self.udp_client = None
-        self.tcp_client = None
-        self.tls_client = None
-        self.config = config
-        self.iface = iface
-        self.ev_controller = ev_controller
+        self.list_of_tasks: List[Coroutine] = []
+        self.udp_client: UDPClient = None
+        self.tcp_client: TCPClient = None
+        self.tls_client: bool = None
+        self.config: EVCCConfig = config
+        self.iface: str = iface
+        self.ev_controller: EVControllerInterface = ev_controller
         self.sdp_retries_number = SDP_MAX_REQUEST_COUNTER
         self._sdp_retry_cycles = self.config.sdp_retry_cycles
 
@@ -287,7 +306,7 @@ class CommunicationSessionHandler:
         EXI().set_exi_codec(codec)
 
         # Receiving queue for UDP client to notify about incoming datagrams
-        self._rcv_queue = asyncio.Queue(0)
+        self._rcv_queue: asyncio.Queue = asyncio.Queue(0)
 
         # The communication session is a tuple containing the session itself
         # and the associated task, so we can cancel the task when needed
@@ -433,6 +452,10 @@ class CommunicationSessionHandler:
             self.iface,
             self.ev_controller,
         )
+        # Overwriting is_tls field in EVCCCommunicationSession with the setting
+        # returned from SDP response. Remember is_tls field in config still represents
+        # the value initially provided in evcc_config.
+        comm_session.is_tls = is_tls
 
         try:
             await comm_session.send_sap()
@@ -554,7 +577,9 @@ class CommunicationSessionHandler:
                 elif isinstance(notification, StopNotification):
                     await cancel_task(self.comm_session[1])
                     del self.comm_session
-                    if not notification.successful:
+                    if notification.successful:
+                        break
+                    else:
                         try:
                             await self.restart_sdp(True)
                         except SDPFailedError as exc:

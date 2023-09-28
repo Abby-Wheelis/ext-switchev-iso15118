@@ -30,7 +30,7 @@ class EVCCConfig(BaseModel):
     raw_supported_energy_services: List[str] = Field(
         _default_supported_energy_services, max_items=4, alias="supportedEnergyServices"
     )
-    supported_energy_services: Optional[List[ServiceV20]] = None
+    supported_energy_services: List[ServiceV20] = None
     is_cert_install_needed: bool = Field(False, alias="isCertInstallNeeded")
     # Indicates the security level (either TCP (unencrypted) or TLS (encrypted))
     # the EVCC shall send in the SDP request
@@ -68,6 +68,9 @@ class EVCCConfig(BaseModel):
     # ISO 15118-20 as well as PMaxSchedule and SalesTariff in ISO 15118-2).
     # The SECC must not transmit more entries than defined in this parameter.
     max_supporting_points: Optional[int] = Field(1024, alias="maxSupportingPoints")
+
+    # charge cycle count
+    charge_loop_cycle: Optional[int] = Field(10, alias="chargeLoopCycle")
 
     def load_raw_values(self):
         # conversion of list of strings to enum types.
@@ -119,3 +122,4 @@ async def load_from_file(file_name: str) -> EVCCConfig:
         return ev_config
     except Exception as err:
         logger.debug(f"Error on loading evcc config file:{err}")
+    return EVCCConfig()

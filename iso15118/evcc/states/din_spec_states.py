@@ -19,7 +19,6 @@ from iso15118.shared.messages.datatypes import (
     DCEVChargeParams,
     DCEVSEStatus,
     DCEVSEStatusCode,
-    EVSENotification,
     SelectedService,
     SelectedServiceList,
     PVEVTargetCurrentDin,
@@ -378,7 +377,7 @@ class ChargeParameterDiscovery(StateEVCC):
             )
 
             # EVerest code start #
-            EVEREST_CTX.publish('AC_EVPowerReady', True)
+            EVEREST_CTX.publish('ev_power_ready', True)
             # EVerest code end #
 
             cable_check_req = CableCheckReq(
@@ -393,8 +392,7 @@ class ChargeParameterDiscovery(StateEVCC):
             )
 
             self.comm_session.selected_schedule = schedule_id
-
-            # TODO Set CP state to C max. 250 ms after sending PowerDeliveryReq
+            await self.comm_session.ev_controller.enable_charging(True)
         else:
             logger.debug(
                 "SECC is still processing the proposed charging "
@@ -566,7 +564,7 @@ class PreCharge(StateEVCC):
             self.comm_session.ongoing_timer = -1
             power_delivery_req: PowerDeliveryReq = await self.build_power_delivery_req()
             
-            EVEREST_CTX.publish('DC_PowerOn', None)
+            EVEREST_CTX.publish('dc_power_on', None)
 
             self.create_next_message(
                 PowerDelivery,
@@ -646,6 +644,7 @@ class PowerDelivery(StateEVCC):
                 Namespace.DIN_MSG_DEF,
             )
         else:
+            await self.comm_session.ev_controller.enable_charging(False)
             self.create_next_message(
                 WeldingDetection,
                 await self.build_welding_detection_req(),
@@ -710,12 +709,10 @@ class CurrentDemand(StateEVCC):
         current_demand_res: CurrentDemandRes = msg.body.current_demand_res
         dc_evse_status: DCEVSEStatus = current_demand_res.dc_evse_status
 
-        # "Charging stop" can be initiated by either party
-        # - by EVSE via EVSENotification
-        # - by EV itself where it sets ready_to_charge to False.
-        if dc_evse_status.evse_notification == EVSENotification.STOP_CHARGING:
+        # EVSE status must always be EVSE ready
+        if dc_evse_status.evse_status_code is not DCEVSEStatusCode.EVSE_READY:
             logger.debug("EVSE Notification received requesting to stop charging.")
-            EVEREST_CTX.publish('AC_StopFromCharger', None)
+            EVEREST_CTX.publish('stop_from_charger', None)
             await self.stop_charging()
         elif await self.comm_session.ev_controller.continue_charging():
             self.create_next_message(

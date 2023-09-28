@@ -9,6 +9,8 @@ from time import time
 from typing import Any, List, Union
 import os
 
+from iso15118.evcc.everest import context as EVEREST_CONTEXT
+
 from iso15118.evcc import evcc_settings
 from iso15118.evcc.comm_session_handler import EVCCCommunicationSession
 from iso15118.evcc.states.evcc_state import StateEVCC
@@ -112,6 +114,7 @@ from iso15118.shared.states import Pause, Terminate
 from iso15118.shared.settings import get_PKI_PATH
 
 logger = logging.getLogger(__name__)
+EVEREST_EV_STATE = EVEREST_CONTEXT.ev_state
 
 # *** EVerest code start ***
 from iso15118.evcc.everest import context as EVEREST_CTX
@@ -198,9 +201,9 @@ class ServiceDiscovery(StateEVCC):
         await self.select_energy_transfer_mode()
 
         charge_service: ChargeService = service_discovery_res.charge_service
-        offered_energy_modes: List[
-            EnergyTransferModeEnum
-        ] = charge_service.supported_energy_transfer_mode.energy_modes
+        offered_energy_modes: List[EnergyTransferModeEnum] = (
+            charge_service.supported_energy_transfer_mode.energy_modes
+        )
 
         if self.comm_session.selected_energy_mode not in offered_energy_modes:
             self.stop_state_machine(
@@ -303,7 +306,7 @@ class ServiceDiscovery(StateEVCC):
             SelectedService(service_id=service_discovery_res.charge_service.service_id)
         )
 
-        if not self.comm_session.is_tls or service_discovery_res.service_list is None:
+        if service_discovery_res.service_list is None:
             return
 
         offered_services: str = ""
@@ -321,6 +324,8 @@ class ServiceDiscovery(StateEVCC):
                 and self.comm_session.selected_auth_option == AuthEnum.PNC_V2
                 and await self.comm_session.ev_controller.is_cert_install_needed()
             ):
+                if not self.comm_session.is_tls:
+                    return
                 # Make sure to send a ServiceDetailReq for the
                 # Certificate service
                 self.comm_session.service_details_to_request.append(service.service_id)
@@ -332,6 +337,15 @@ class ServiceDiscovery(StateEVCC):
                 self.comm_session.selected_services.append(
                     SelectedService(service_id=ServiceID.CERTIFICATE)
                 )
+            if (
+                service.service_category == ServiceCategory.CUSTOM
+                and await self.comm_session.ev_controller.is_sae_j2847_v2g_active() == True
+                and (service.service_id == ServiceID.V2H or service.service_id == ServiceID.V2G)
+            ):
+                self.comm_session.selected_services.append(
+                    SelectedService(service_id = service.service_id)
+                )
+                self.comm_session.sae_j2847_active = service.service_id
 
             # Request more service details if you're interested in e.g.
             # an Internet service or a use case-specific service
@@ -777,6 +791,9 @@ class ChargeParameterDiscovery(StateEVCC):
         if charge_params_res.evse_processing == EVSEProcessing.FINISHED:
             # Reset the Ongoing timer
             self.comm_session.ongoing_timer = -1
+            if (self.comm_session.charging_session_timer < 0):
+                self.comm_session.charging_session_timer = time()
+            time_elapsed = (time() - self.comm_session.charging_session_timer)
 
             # TODO Look at EVSEStatus and EVSENotification and react accordingly
             #      if e.g. EVSENotification is set to STOP_CHARGING or if RCD
@@ -787,15 +804,22 @@ class ChargeParameterDiscovery(StateEVCC):
                 schedule_id,
                 charging_profile,
             ) = await ev_controller.process_sa_schedules_v2(
-                charge_params_res.sa_schedule_list.schedule_tuples
+                charge_params_res.sa_schedule_list.schedule_tuples,
+                time_elapsed,
             )
 
             # EVerest code start #
+            self.comm_session.end_of_profile_schedule = charging_profile.profile_entries[-1].start
+
+            # If end of profile > end of SECC schedule or no DT (dt==0), end renegotiation...
+            departure_time = EVEREST_EV_STATE.DepartureTime
+            if (self.comm_session.end_of_profile_schedule >= departure_time or 0 == departure_time):
+                self.comm_session.end_of_profile_schedule = 86400
+
             EVEREST_CTX.publish('AC_EVPowerReady', True)
             # EVerest code end #
-
+            await self.comm_session.ev_controller.enable_charging(True)
             if self.comm_session.selected_charging_type_is_ac:
-
                 power_delivery_req = PowerDeliveryReq(
                     charge_progress=charge_progress,
                     sa_schedule_tuple_id=schedule_id,
@@ -822,7 +846,7 @@ class ChargeParameterDiscovery(StateEVCC):
 
             self.comm_session.selected_schedule = schedule_id
 
-            # TODO Set CP state to C max. 250 ms after sending PowerDeliveryReq
+            await self.comm_session.ev_controller.enable_charging(True)
         else:
             logger.debug(
                 "SECC is still processing the proposed charging "
@@ -839,9 +863,16 @@ class ChargeParameterDiscovery(StateEVCC):
             else:
                 self.comm_session.ongoing_timer = time()
 
-            charge_params = await ev_controller.get_charge_params_v2(
+            if (await ev_controller.is_sae_j2847_v2g_active() == True
+                and self.comm_session.sae_j2847_active == ServiceID.V2H
+            ):
+              charge_params = await ev_controller.get_charge_params_v2h(
                 Protocol.ISO_15118_2
             )
+            else:
+                charge_params = await ev_controller.get_charge_params_v2(
+                    Protocol.ISO_15118_2
+                )
 
             charge_parameter_discovery_req = ChargeParameterDiscoveryReq(
                 requested_energy_mode=charge_params.energy_mode,
@@ -898,6 +929,7 @@ class PowerDelivery(StateEVCC):
                 Namespace.ISO_V2_MSG_DEF,
             )
         elif self.comm_session.charging_session_stop_v2:
+            await self.comm_session.ev_controller.enable_charging(False)
             welding_detection_req = WeldingDetectionReq(
                 dc_ev_status=await self.comm_session.ev_controller.get_dc_ev_status()
             )
@@ -947,9 +979,17 @@ class PowerDelivery(StateEVCC):
             )
 
     async def build_current_demand_data(self) -> CurrentDemandReq:
-        dc_ev_charge_params = (
-            await self.comm_session.ev_controller.get_dc_charge_params()
-        )
+
+        if (await self.comm_session.ev_controller.is_sae_j2847_v2g_active() == True
+            and self.comm_session.sae_j2847_active == ServiceID.V2H
+        ):
+            dc_ev_charge_params = (
+                await self.comm_session.ev_controller.get_dc_discharge_params()
+            )
+        else: 
+            dc_ev_charge_params = (
+                await self.comm_session.ev_controller.get_dc_charge_params()
+            )
         current_demand_req = CurrentDemandReq(
             dc_ev_status=await self.comm_session.ev_controller.get_dc_ev_status(),
             ev_target_current=dc_ev_charge_params.dc_target_current,
@@ -1040,7 +1080,7 @@ class MeteringReceipt(StateEVCC):
             else:
                 self.create_next_message(
                     CurrentDemand,
-                    self.build_current_demand_req(),
+                    await self.build_current_demand_req(),
                     Timeouts.CHARGING_STATUS_REQ,
                     Namespace.ISO_V2_MSG_DEF,
                 )
@@ -1144,7 +1184,7 @@ class ChargingStatus(StateEVCC):
         # EVerest code start #
         if charging_status_res.evse_max_current:
             evse_max_current = charging_status_res.evse_max_current.value * pow(10, charging_status_res.evse_max_current.multiplier)
-            EVEREST_CTX.publish('AC_EVSEMaxCurrent', evse_max_current)
+            EVEREST_CTX.publish('ac_evse_max_current', evse_max_current)
         # EVerest code end #
 
         if charging_status_res.receipt_required and self.comm_session.is_tls:
@@ -1187,7 +1227,7 @@ class ChargingStatus(StateEVCC):
                     f"MeteringReceiptReq: {exc}"
                 )
                 return
-        elif ac_evse_status.evse_notification == EVSENotification.RE_NEGOTIATION:
+        elif ac_evse_status.evse_notification == EVSENotification.RE_NEGOTIATION or is_end_of_profile:
             self.comm_session.renegotiation_requested = True
             power_delivery_req = PowerDeliveryReq(
                 charge_progress=ChargeProgress.RENEGOTIATE,
@@ -1201,7 +1241,7 @@ class ChargingStatus(StateEVCC):
             )
             logger.debug(f"ChargeProgress is set to {ChargeProgress.RENEGOTIATE}")
         elif ac_evse_status.evse_notification == EVSENotification.STOP_CHARGING:
-            EVEREST_CTX.publish('AC_StopFromCharger', None)
+            EVEREST_CTX.publish('stop_from_charger', None)
             self.comm_session.charging_session_stop_v2 = ChargingSession.TERMINATE
             await self.stop_pause_charging()
         elif await self.comm_session.ev_controller.pause():
@@ -1353,7 +1393,7 @@ class PreCharge(StateEVCC):
                 ),
             )
 
-            EVEREST_CTX.publish('DC_PowerOn', None)
+            EVEREST_CTX.publish('dc_power_on', None)
 
             self.create_next_message(
                 PowerDelivery,
@@ -1420,14 +1460,14 @@ class CurrentDemand(StateEVCC):
         dc_evse_status: DCEVSEStatus = current_demand_res.dc_evse_status
 
         if dc_evse_status.evse_notification == EVSENotification.STOP_CHARGING:
-            EVEREST_CTX.publish('AC_StopFromCharger', None)
+            EVEREST_CTX.publish('stop_from_charger', None)
             self.comm_session.charging_session_stop_v2 = ChargingSession.TERMINATE
             await self.stop_pause_charging()
         elif await self.comm_session.ev_controller.pause():
             self.comm_session.charging_session_stop_v2 = ChargingSession.PAUSE
             await self.stop_pause_charging()
         elif await self.comm_session.ev_controller.continue_charging():
-            current_demand_req = await self.build_current_demand_data()
+            current_demand_req = await self.build_current_demand_data(current_demand_res)
 
             self.create_next_message(
                 CurrentDemand,
@@ -1439,9 +1479,36 @@ class CurrentDemand(StateEVCC):
             self.comm_session.charging_session_stop_v2 = ChargingSession.TERMINATE
             await self.stop_pause_charging()
 
-    async def build_current_demand_data(self) -> CurrentDemandReq:
+    async def build_current_demand_data(self, current_demand_res: CurrentDemandRes) -> CurrentDemandReq:
         ev_controller = self.comm_session.ev_controller
-        dc_ev_charge_params = await ev_controller.get_dc_charge_params()
+
+        if (await ev_controller.is_sae_j2847_v2g_active() == True
+            and self.comm_session.sae_j2847_active == ServiceID.V2H
+        ):
+            dc_ev_charge_params = (
+                await ev_controller.get_dc_discharge_params()
+            )
+        elif (await ev_controller.is_sae_j2847_v2g_active() == True
+              and self.comm_session.sae_j2847_active == ServiceID.V2G
+        ):
+            # Trigger via CurrentDemandRes -> Check EvsePresentCurrent, EvseMaximumCurrentLimit & EvseMaximumPowerLimit
+            if (current_demand_res.evse_present_current.value < 0
+                and current_demand_res.evse_max_current_limit.value < 0
+                and current_demand_res.evse_max_power_limit.value < 0
+            ):
+                dc_ev_charge_params = (
+                    await ev_controller.get_dc_discharge_params()
+                )
+            else:
+                dc_ev_charge_params = (
+                    await ev_controller.get_dc_charge_params()
+                )
+        # Todo(sl): trigger via node-red bpt and normal charging
+            
+        else: 
+            dc_ev_charge_params = (
+                await ev_controller.get_dc_charge_params()
+            )
         current_demand_req = CurrentDemandReq(
             dc_ev_status=await ev_controller.get_dc_ev_status(),
             ev_target_current=dc_ev_charge_params.dc_target_current,

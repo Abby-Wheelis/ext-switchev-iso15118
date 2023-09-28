@@ -15,6 +15,7 @@ from enum import Enum, IntEnum
 from typing import List
 
 from pydantic import Field, conbytes, constr, root_validator, validator
+from typing_extensions import TypeAlias
 
 from iso15118.shared.messages import BaseModel
 from iso15118.shared.messages.datatypes import (
@@ -50,9 +51,9 @@ from iso15118.shared.validators import one_field_must_be_set
 # https://pydantic-docs.helpmanual.io/usage/types/#constrained-types
 # constrained types
 # Check Annex C.6 or the certificateType in V2G_CI_MsgDataTypes.xsd
-Certificate = conbytes(max_length=800)
+Certificate: TypeAlias = conbytes(max_length=800)  # type: ignore
 # Check Annex C.6 or the eMAIDType in V2G_CI_MsgDataTypes.xsd
-eMAID = constr(min_length=14, max_length=15)
+eMAID: TypeAlias = constr(min_length=14, max_length=15)  # type: ignore
 
 
 class EVChargeParameter(BaseModel):
@@ -135,7 +136,9 @@ class ServiceID(IntEnum):
     # ("Service enabling the exchange of use case specific information about
     # the EVSE"). No idea what they mean by that, so we go with 'OtherCustom'.
     CUSTOM = 4
-
+    # SAE J2847/2 V2H/G
+    V2H = 28472
+    V2G = 28473
 
 class ServiceCategory(str, Enum):
     """See section 8.4.3.3.2 in ISO 15118-2"""
