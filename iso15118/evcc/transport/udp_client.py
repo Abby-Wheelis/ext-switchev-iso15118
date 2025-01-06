@@ -65,7 +65,7 @@ class UDPClient(DatagramProtocol):
         # as the dual of bind(), in the server side, since bind() controls which
         # interface(s) the socket receives multicast packets from.
         interface_index = socket.if_nametoindex(iface)
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, interface_index)
+        # sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, interface_index)
 
         return sock
 
