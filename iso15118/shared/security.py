@@ -1515,6 +1515,14 @@ class CertPath(str, Enum):
     VEHICLE_ROOT_PEM = "ca/v2g/V2G_ROOT_CA.pem"
     VEHICLE_CERT_CHAIN_PEM = "client/vehicle/VEHICLE_CERT_CHAIN.pem"
 
+    # Vehicle
+    VEHICLE_LEAF_DER = "client/vehicle/VEHICLE_LEAF.der"
+    VEHICLE_SUB_CA2_DER = "ca/vehicle/VEHICLE_SUB_CA2.der"
+    VEHICLE_SUB_CA1_DER = "ca/vehicle/VEHICLE_SUB_CA1.der"
+    VEHICLE_ROOT_DER = "ca/v2g/V2G_ROOT_CA.der"
+    VEHICLE_ROOT_PEM = "ca/v2g/V2G_ROOT_CA.pem"
+    VEHICLE_CERT_CHAIN_PEM = "client/vehicle/VEHICLE_CERT_CHAIN.pem"
+
 
 class KeyPath(str, Enum):
     """
@@ -1555,6 +1563,12 @@ class KeyPath(str, Enum):
             "iso15118_2/private_keys/",
             self.value,
         )
+
+    # Vehicle
+    VEHICLE_LEAF_PEM = "client/vehicle/VEHICLE_LEAF.key"
+    VEHICLE_SUB_CA2_PEM = "client/vehicle/VEHICLE_SUB_CA2.key"
+    VEHICLE_SUB_CA1_PEM = "client/vehicle/VEHICLE_SUB_CA1.key"
+    VEHICLE_ROOT_PEM = "client/v2g/V2G_ROOT_CA.key"
 
     # Vehicle
     VEHICLE_LEAF_PEM = "client/vehicle/VEHICLE_LEAF.key"

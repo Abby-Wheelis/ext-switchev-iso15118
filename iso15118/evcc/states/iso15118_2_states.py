@@ -816,6 +816,7 @@ class ChargeParameterDiscovery(StateEVCC):
             if (self.comm_session.end_of_profile_schedule >= departure_time or 0 == departure_time):
                 self.comm_session.end_of_profile_schedule = 86400
 
+            EVEREST_CTX.publish('ev_power_ready', True)
             EVEREST_CTX.publish('AC_EVPowerReady', True)
             # EVerest code end #
             await self.comm_session.ev_controller.enable_charging(True)
@@ -1184,6 +1185,13 @@ class ChargingStatus(StateEVCC):
         # EVerest code start #
         if charging_status_res.evse_max_current:
             evse_max_current = charging_status_res.evse_max_current.value * pow(10, charging_status_res.evse_max_current.multiplier)
+            EVEREST_CTX.publish('AC_EVSEMaxCurrent', evse_max_current)
+
+            time_elapsed = (time() - self.comm_session.charging_session_timer)
+            logger.debug(f'End Of Schedule:: {self.comm_session.end_of_profile_schedule}')
+            logger.debug(f'NewClockValue:: {time_elapsed}')
+
+            is_end_of_profile = (time_elapsed > self.comm_session.end_of_profile_schedule) and (self.comm_session.end_of_profile_schedule <= 86400)
             EVEREST_CTX.publish('ac_evse_max_current', evse_max_current)
         # EVerest code end #
 

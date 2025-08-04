@@ -10,9 +10,10 @@ from datetime import datetime, timedelta
 import logging
 import time
 from typing import List, Optional, Tuple, Type, Union
+import os
 
 from iso15118.secc.comm_session_handler import SECCCommunicationSession
-from iso15118.secc.controller.ev_data import EVSessionContext15118
+from iso15118.secc.controller.ev_data import EVSessionContext
 from iso15118.secc.controller.evse_data import CurrentType
 from iso15118.secc.controller.interface import AuthorizationResponse
 from iso15118.secc.states.secc_state import StateSECC
@@ -34,6 +35,11 @@ from iso15118.shared.messages.app_protocol import (
 from iso15118.shared.messages.datatypes import (
     DCEVSEChargeParameter,
     DCEVSEStatus,
+    DCEVSEStatusCode,
+    PVEVMaxCurrent,
+    PVEVMaxCurrentLimit,
+    PVEVMaxVoltage,
+    PVEVMaxVoltageLimit,
     PVEVSEPresentCurrent,
 )
 from iso15118.shared.messages.din_spec.datatypes import (
@@ -189,14 +195,14 @@ class SessionSetup(StateSECC):
         session_setup_req: SessionSetupReq = msg.body.session_setup_req
 
         # EVerest code start #
-        evcc_id : str = session_setup_req.evcc_id[0:2]
+        evcc_id: str = session_setup_req.evcc_id[0:2]
         MAC_COLONS = 5
         if session_setup_req.evcc_id.find(':') == -1:
-            for i in range (MAC_COLONS):
-                evcc_id+=':' + session_setup_req.evcc_id[i*2+2:i*2+4]
+            for i in range(MAC_COLONS):
+                evcc_id += ':' + session_setup_req.evcc_id[i*2+2:i*2+4]
         EVEREST_CTX.publish('EVCCIDD', evcc_id.upper())
         await self.comm_session.evse_controller.reset_evse_values()
-        # EVerest code end #     
+        # EVerest code end #
 
         # Check session ID. Most likely, we need to create a new one
         session_id: str = get_random_bytes(8).hex().upper()
@@ -216,7 +222,8 @@ class SessionSetup(StateSECC):
             # False session ID from EV, gracefully assigning new session ID
             logger.warning(
                 f"EVCC's session ID {msg.header.session_id} "
-                f"does not match {self.comm_session.ev_session_context.session_id}. "
+                f"does not match {
+                    self.comm_session.ev_session_context.session_id}. "
                 f"New session ID {session_id} assigned"
             )
             self.response_code = ResponseCode.OK_NEW_SESSION_ESTABLISHED
@@ -334,7 +341,8 @@ class ServiceDiscovery(StateSECC):
         auth_options: List[AuthEnum] = []
 
         if self.comm_session.ev_session_context.auth_options:
-            logger.info("AuthOptions available in context. This is a resumed session.")
+            logger.info(
+                "AuthOptions available in context. This is a resumed session.")
             # This is a resumed session.
             # Return the auth option that was previously selected.
             auth_options = self.comm_session.ev_session_context.auth_options
@@ -364,15 +372,14 @@ class ServiceDiscovery(StateSECC):
 
         if self.comm_session.ev_session_context.charge_service:
             logger.info(
-                "ChargeService available in context. This is a resumed session."
-            )
+                "ChargeService available in context. This is a resumed session.")
             charge_service = self.comm_session.ev_session_context.charge_service
         else:
             charge_service = ChargeService(
                 service_id=ServiceID.CHARGING,
                 service_name=ServiceName.CHARGING,
                 service_category=ServiceCategory.CHARGING,
-                free_service=self.comm_session.config.free_charging_service,
+                free_service=await self.comm_session.evse_controller.is_free(),
                 supported_energy_transfer_mode=EnergyTransferModeList(
                     energy_modes=energy_modes
                 ),
@@ -499,7 +506,8 @@ class ServiceDetail(StateSECC):
         # Certificate installation service
         # We only offer installation of contract certificates, not updates
         if service_detail_req.service_id == ServiceID.CERTIFICATE:
-            install_parameter = Parameter(name="Service", str_value="Installation")
+            install_parameter = Parameter(
+                name="Service", str_value="Installation")
             install_parameter_set = ParameterSet(
                 parameter_set_id=1, parameters=[install_parameter]
             )
@@ -521,7 +529,8 @@ class ServiceDetail(StateSECC):
         service_detail_res = ServiceDetailRes(
             response_code=ResponseCode.OK,
             service_id=service_detail_req.service_id,
-            service_parameter_list=ServiceParameterList(parameter_set=parameter_set),
+            service_parameter_list=ServiceParameterList(
+                parameter_set=parameter_set),
         )
 
         self.create_next_message(
@@ -589,7 +598,7 @@ class PaymentServiceSelection(StateSECC):
                 message, message_exi
             )
             return
-        
+
         if msg.body.certificate_update_req:
             await CertificateUpdate(self.comm_session).process_message(
                 message, message_exi
@@ -616,7 +625,8 @@ class PaymentServiceSelection(StateSECC):
         selected_service_list = service_selection_req.selected_service_list
 
         # EVerest code start #
-        EVEREST_CTX.publish('SelectedPaymentOption', service_selection_req.selected_auth_option)
+        EVEREST_CTX.publish('SelectedPaymentOption',
+                            service_selection_req.selected_auth_option)
         # EVerest code end #
 
         charge_service_selected: bool = False
@@ -734,7 +744,8 @@ class CertificateInstallation(StateSECC):
 
         try:
             if self.comm_session.config.use_cpo_backend:
-                logger.info("Using CPO backend to fetch CertificateInstallationRes")
+                logger.info(
+                    "Using CPO backend to fetch CertificateInstallationRes")
                 # CertificateInstallationReq must be base64 encoded before forwarding
                 # to backend.
                 # Call to b64encode returns byte[] - hence the .decode("utf-8")
@@ -806,10 +817,13 @@ class CertificateInstallation(StateSECC):
 
         try:
             sub_ca_certificates_oem = [
-                load_cert(os.path.join(get_PKI_PATH(), CertPath.OEM_SUB_CA2_DER)),
-                load_cert(os.path.join(get_PKI_PATH(), CertPath.OEM_SUB_CA1_DER)),
+                load_cert(os.path.join(get_PKI_PATH(),
+                          CertPath.OEM_SUB_CA2_DER)),
+                load_cert(os.path.join(get_PKI_PATH(),
+                          CertPath.OEM_SUB_CA1_DER)),
             ]
-            root_ca_certificate_oem = load_cert(os.path.join(get_PKI_PATH(), CertPath.OEM_ROOT_DER))
+            root_ca_certificate_oem = load_cert(
+                os.path.join(get_PKI_PATH(), CertPath.OEM_ROOT_DER))
         except (FileNotFoundError, IOError):
             pass
 
@@ -836,11 +850,13 @@ class CertificateInstallation(StateSECC):
         # CertificateInstallationReq must be used.
         try:
             dh_pub_key, encrypted_priv_key_bytes = encrypt_priv_key(
-                oem_prov_cert=load_cert(os.path.join(get_PKI_PATH(), CertPath.OEM_LEAF_DER)),
+                oem_prov_cert=load_cert(os.path.join(
+                    get_PKI_PATH(), CertPath.OEM_LEAF_DER)),
                 priv_key_to_encrypt=load_priv_key(
                     os.path.join(get_PKI_PATH(), KeyPath.CONTRACT_LEAF_PEM),
                     KeyEncoding.PEM,
-                    os.path.join(get_PKI_PATH(), KeyPasswordPath.CONTRACT_LEAF_KEY_PASSWORD),
+                    os.path.join(get_PKI_PATH(),
+                                 KeyPasswordPath.CONTRACT_LEAF_KEY_PASSWORD),
                 ),
             )
         except EncryptionError:
@@ -857,11 +873,14 @@ class CertificateInstallation(StateSECC):
         # The elements that need to be part of the signature
         contract_cert_chain = CertificateChain(
             id="id1",
-            certificate=load_cert(os.path.join(get_PKI_PATH(), CertPath.CONTRACT_LEAF_DER)),
+            certificate=load_cert(os.path.join(
+                get_PKI_PATH(), CertPath.CONTRACT_LEAF_DER)),
             sub_certificates=SubCertificates(
                 certificates=[
-                    load_cert(os.path.join(get_PKI_PATH(), CertPath.MO_SUB_CA2_DER)),
-                    load_cert(os.path.join(get_PKI_PATH(), CertPath.MO_SUB_CA1_DER)),
+                    load_cert(os.path.join(get_PKI_PATH(),
+                              CertPath.MO_SUB_CA2_DER)),
+                    load_cert(os.path.join(get_PKI_PATH(),
+                              CertPath.MO_SUB_CA1_DER)),
                 ]
             ),
         )
@@ -873,11 +892,14 @@ class CertificateInstallation(StateSECC):
             id="id4", value=get_cert_cn(load_cert(os.path.join(get_PKI_PATH(), CertPath.CONTRACT_LEAF_DER)))
         )
         cps_certificate_chain = CertificateChain(
-            certificate=load_cert(os.path.join(get_PKI_PATH(), CertPath.CPS_LEAF_DER)),
+            certificate=load_cert(os.path.join(
+                get_PKI_PATH(), CertPath.CPS_LEAF_DER)),
             sub_certificates=SubCertificates(
                 certificates=[
-                    load_cert(os.path.join(get_PKI_PATH(), CertPath.CPS_SUB_CA2_DER)),
-                    load_cert(os.path.join(get_PKI_PATH(), CertPath.CPS_SUB_CA1_DER)),
+                    load_cert(os.path.join(get_PKI_PATH(),
+                              CertPath.CPS_SUB_CA2_DER)),
+                    load_cert(os.path.join(get_PKI_PATH(),
+                              CertPath.CPS_SUB_CA1_DER)),
                 ]
             ),
         )
@@ -924,7 +946,8 @@ class CertificateInstallation(StateSECC):
             signature_key = load_priv_key(
                 os.path.join(get_PKI_PATH(), KeyPath.CPS_LEAF_PEM),
                 KeyEncoding.PEM,
-                os.path.join(get_PKI_PATH(), KeyPasswordPath.CPS_LEAF_KEY_PASSWORD),
+                os.path.join(get_PKI_PATH(),
+                             KeyPasswordPath.CPS_LEAF_KEY_PASSWORD),
             )
 
             signature = create_signature(elements_to_sign, signature_key)
@@ -944,9 +967,10 @@ class CertificateUpdate(StateSECC):
     The ISO 15118-2 state in which the SECC processes a
     CertificateUpdateReq message from the EVCC.
     """
+
     def __init__(self, comm_session: SECCCommunicationSession):
         super().__init__(comm_session, Timeouts.V2G_SECC_SEQUENCE_TIMEOUT)
-    
+
     async def process_message(
         self,
         message: Union[
@@ -969,7 +993,7 @@ class CertificateUpdate(StateSECC):
                 ResponseCode.FAILED_SIGNATURE_ERROR,
             )
             return
-        
+
         signature = None
         try:
             logger.info("Using CPO backend to fetch CertificateUpdateRes")
@@ -1038,6 +1062,7 @@ class CertificateUpdate(StateSECC):
             sub_ca_certs=None,
             root_ca_cert=None,
         )
+
 
 class PaymentDetails(StateSECC):
     """
@@ -1109,11 +1134,33 @@ class PaymentDetails(StateSECC):
                     logger.info(f"Using MO root at {root_cert_path}")
                 else:
                     root_cert = None
+                    pem_certificate_chain = build_pem_certificate_chain(
+                        payment_details_req.cert_chain, root_cert)
                     logger.info("No suitable MO root found.")
+                # verify contract certificate against MO root if this is enabled
+                if (self.comm_session.config.verify_contract_cert_chain):
+                    try:
+                        verify_certs(leaf_cert, sub_ca_certs, root_cert)
+                    except CertSignatureError:
+                        # This error means there was an error while validating the parent-child
+                        # relationship in the cert chain. This could also very well be
+                        # a limitation on the SECC that the root certificate present
+                        # doesn't match the chain passed through.
+                        # So set root_cert to None and pass the incoming chain to the backend
+                        # for further checks.
+                        logger.info(
+                            "Local chain verification failed. "
+                            "Passing verification to backend."
+                        )
+                else:
+                    root_cert = None
+                    pem_certificate_chain = build_pem_certificate_chain(
+                        payment_details_req.cert_chain, root_cert)
             except FileNotFoundError:
                 logger.warning("MO Root Cert not available.")
                 root_cert = None
-                pem_certificate_chain = build_pem_certificate_chain(payment_details_req.cert_chain, root_cert)
+                pem_certificate_chain = build_pem_certificate_chain(
+                    payment_details_req.cert_chain, root_cert)
 
             try:
                 verify_certs(leaf_cert, sub_ca_certs, root_cert)
@@ -1141,18 +1188,20 @@ class PaymentDetails(StateSECC):
                     self.comm_session.contract_cert_chain, root_cert
                 )
             except Exception as e:
-                logger.warning("Could not retrieve OCSP request data from certificate")
+                logger.warning(
+                    "Could not retrieve OCSP request data from certificate")
                 hash_data = None
-            
+
             ProvidedIdToken: dict = dict([
                 ("id_token", payment_details_req.emaid),
                 ("authorization_type", "PlugAndCharge"),
                 ("id_token_type", "eMAID"),
             ])
- 
+
             if hash_data is not None:
-                ProvidedIdToken.update({"iso15118CertificateHashData": hash_data})
-            
+                ProvidedIdToken.update(
+                    {"iso15118CertificateHashData": hash_data})
+
             if pem_certificate_chain is not None:
                 ProvidedIdToken.update({"certificate": pem_certificate_chain})
 
@@ -1349,16 +1398,25 @@ class Authorization(StateSECC):
 
         if await self.comm_session.evse_controller.is_free() is True:
             self.authorizationFinished = AuthorizationStatus.ACCEPTED
-        else: 
+        else:
             if (self.isAuthorizationRequested() is False and
-                self.comm_session.selected_auth_option is AuthEnum.EIM_V2
-            ):
+                    self.comm_session.selected_auth_option is AuthEnum.EIM_V2
+                ):
                 EVEREST_CTX.publish('Require_Auth_EIM', None)
                 self.authorizationRequested = True
 
         # note that the certificate_chain and hashed_data are empty here
         # as they were already send previously in the PaymentDetails state
 
+        current_authorization_status = (
+            await self.comm_session.evse_controller.is_authorized(
+                id_token_type=(
+                    AuthorizationTokenType.EMAID
+                    if self.comm_session.selected_auth_option == AuthEnum.PNC_V2
+                    else AuthorizationTokenType.EXTERNAL
+                ),
+            )
+        )
         response_code: Optional[
             Union[ResponseCodeV2, ResponseCodeV20, ResponseCodeDINSPEC]
         ] = ResponseCode.OK
@@ -1368,7 +1426,6 @@ class Authorization(StateSECC):
         if not self.authorization_complete:
             current_authorization_status = (
                 await self.comm_session.evse_controller.is_authorized(
-                    id_token=id_token,
                     id_token_type=(
                         AuthorizationTokenType.EMAID
                         if self.comm_session.selected_auth_option == AuthEnum.PNC_V2
@@ -1415,6 +1472,16 @@ class Authorization(StateSECC):
             current_authorization_status.authorization_status
             == AuthorizationStatus.REJECTED
         ):
+            # according to table 112 of ISO 15118-2, the Response code
+            # for this message can only be one of the following:
+            # FAILED, FAILED_Challenge_Invalid,
+            # Failed_SEQUENCE_ERROR, Failed_SIGNATURE_ERROR,
+            # FAILED_Certificate_Revoked and Failed_UNKNOWN_SESSION
+
+        elif (
+            current_authorization_status.authorization_status
+            == AuthorizationStatus.REJECTED
+        ):
             self.stop_state_machine(
                 "Authorization was rejected",
                 message,
@@ -1430,7 +1497,7 @@ class Authorization(StateSECC):
             # „Ongoing_WaitingForCustomerInteraction“ in AuthorizationRes.
             if self.comm_session.selected_auth_option is AuthEnum.EIM_V2:
                 auth_status = EVSEProcessing.ONGOING_WAITING_FOR_CUSTOMER
-            
+
         authorization_res = AuthorizationRes(
             response_code=response_code, evse_processing=auth_status
         )
@@ -1506,7 +1573,8 @@ class ChargeParameterDiscovery(StateSECC):
         )
 
         # EVerest code start #
-        EVEREST_CTX.publish('RequestedEnergyTransferMode', charge_params_req.requested_energy_mode)
+        EVEREST_CTX.publish('RequestedEnergyTransferMode',
+                            charge_params_req.requested_energy_mode)
         # EVerest code end #
 
         if charge_params_req.requested_energy_mode not in (
@@ -1544,6 +1612,33 @@ class ChargeParameterDiscovery(StateSECC):
             ev_data_context.update_ac_charge_parameters_v2(
                 charge_params_req.ac_ev_charge_parameter
             )
+
+            # EVerest code start #
+            ev_max_voltage: Union[
+                PVEVMaxVoltageLimit, PVEVMaxVoltage
+            ] = charge_params_req.ac_ev_charge_parameter.ev_max_voltage
+            ev_max_current: Union[
+                PVEVMaxCurrentLimit, PVEVMaxCurrent
+            ] = charge_params_req.ac_ev_charge_parameter.ev_max_current
+            e_amount = charge_params_req.ac_ev_charge_parameter.e_amount
+            ev_min_current = charge_params_req.ac_ev_charge_parameter.ev_min_current
+
+            p_e_amount: float = e_amount.value * pow(10, e_amount.multiplier)
+            EVEREST_CTX.publish('AC_EAmount', p_e_amount)
+            p_ev_max_voltage: float = ev_max_voltage.value * \
+                pow(10, ev_max_voltage.multiplier)
+            # if p_ev_max_voltage < 0: p_ev_max_voltage = 0
+            EVEREST_CTX.publish('AC_EVMaxVoltage', p_ev_max_voltage)
+            p_ev_max_current: float = ev_max_current.value * \
+                pow(10, ev_max_current.multiplier)
+            # if p_ev_max_current < 0: p_ev_max_current = 0
+            EVEREST_CTX.publish('AC_EVMaxCurrent', p_ev_max_current)
+            p_ev_min_current: float = ev_min_current.value * \
+                pow(10, ev_min_current.multiplier)
+            # if p_ev_min_current < 0: p_ev_min_current = 0
+            EVEREST_CTX.publish('AC_EVMinCurrent', p_ev_min_current)
+            # EVerest code end #
+
         else:
             dc_evse_charge_params = (
                 await self.comm_session.evse_controller.get_dc_charge_parameters_v2()
@@ -1552,7 +1647,142 @@ class ChargeParameterDiscovery(StateSECC):
             ev_data_context.update_dc_charge_parameters(
                 charge_params_req.dc_ev_charge_parameter
             )
-        await self.comm_session.evse_controller.send_rated_limits()
+            await self.comm_session.evse_controller.send_rated_limits()
+
+            # EVerest code start #
+            ev_max_voltage = (
+                charge_params_req.dc_ev_charge_parameter.ev_maximum_voltage_limit
+            )
+            ev_max_current = (
+                charge_params_req.dc_ev_charge_parameter.ev_maximum_current_limit
+            )
+            ev_energy_request = (
+                charge_params_req.dc_ev_charge_parameter.ev_energy_request
+            )
+            ev_max_power = (
+                charge_params_req.dc_ev_charge_parameter.ev_maximum_power_limit
+            )
+            dc_ev_charge_params: DCEVChargeParameter = charge_params_req.dc_ev_charge_parameter
+            ev_max_current_limit: float = dc_ev_charge_params.ev_maximum_current_limit.value * pow(
+                10, dc_ev_charge_params.ev_maximum_current_limit.multiplier
+            )
+            # if ev_max_current_limit < 0: ev_max_current_limit = 0
+            ev_max_voltage_limit: float = dc_ev_charge_params.ev_maximum_voltage_limit.value * pow(
+                10, dc_ev_charge_params.ev_maximum_voltage_limit.multiplier
+            )
+            # if ev_max_voltage_limit < 0: ev_max_voltage_limit = 0
+            ev_maxvalues: dict = dict([
+                ("DC_EVMaximumCurrentLimit", ev_max_current_limit),
+                ("DC_EVMaximumVoltageLimit", ev_max_voltage_limit)
+            ])
+
+            if dc_ev_charge_params.ev_maximum_power_limit:
+                ev_max_power_limit: float = dc_ev_charge_params.ev_maximum_power_limit.value * pow(
+                    10, dc_ev_charge_params.ev_maximum_power_limit.multiplier
+                )
+                # if ev_max_power_limit < 0: ev_max_power_limit = 0
+                ev_maxvalues.update(
+                    {"DC_EVMaximumPowerLimit": ev_max_power_limit})
+
+            EVEREST_CTX.publish('DC_EVMaximumLimits', ev_maxvalues)
+
+            if dc_ev_charge_params.ev_energy_capacity:
+                ev_energy_capacity: float = dc_ev_charge_params.ev_energy_capacity.value * pow(
+                    10, dc_ev_charge_params.ev_energy_capacity.multiplier
+                )
+                EVEREST_CTX.publish('DC_EVEnergyCapacity', ev_energy_capacity)
+            if ev_energy_request:
+                p_ev_energy_request: float = ev_energy_request.value * pow(
+                    10, ev_energy_request.multiplier
+                )
+                EVEREST_CTX.publish('DC_EVEnergyRequest', p_ev_energy_request)
+
+            if dc_ev_charge_params.full_soc:
+                EVEREST_CTX.publish('DC_FullSOC', dc_ev_charge_params.full_soc)
+            if dc_ev_charge_params.bulk_soc:
+                EVEREST_CTX.publish('DC_BulkSOC', dc_ev_charge_params.bulk_soc)
+
+            ev_status: dict = dict([
+                ("DC_EVReady", dc_ev_charge_params.dc_ev_status.ev_ready),
+                ("DC_EVErrorCode", dc_ev_charge_params.dc_ev_status.ev_error_code),
+                ("DC_EVRESSSOC", dc_ev_charge_params.dc_ev_status.ev_ress_soc),
+            ])
+            EVEREST_CTX.publish('DC_EVStatus', ev_status)
+            # EVerest code end #
+
+            # EVerest code start #
+            ev_max_voltage = (
+                charge_params_req.dc_ev_charge_parameter.ev_maximum_voltage_limit
+            )
+            ev_max_current = (
+                charge_params_req.dc_ev_charge_parameter.ev_maximum_current_limit
+            )
+            ev_energy_request = (
+                charge_params_req.dc_ev_charge_parameter.ev_energy_request
+            )
+            ev_max_power = (
+                charge_params_req.dc_ev_charge_parameter.ev_maximum_power_limit
+            )
+            dc_ev_charge_params: DCEVChargeParameter = charge_params_req.dc_ev_charge_parameter
+            ev_max_current_limit: float = dc_ev_charge_params.ev_maximum_current_limit.value * pow(
+                10, dc_ev_charge_params.ev_maximum_current_limit.multiplier
+            )
+            # if ev_max_current_limit < 0: ev_max_current_limit = 0
+            ev_max_voltage_limit: float = dc_ev_charge_params.ev_maximum_voltage_limit.value * pow(
+                10, dc_ev_charge_params.ev_maximum_voltage_limit.multiplier
+            )
+            # if ev_max_voltage_limit < 0: ev_max_voltage_limit = 0
+            ev_maxvalues: dict = dict([
+                ("DC_EVMaximumCurrentLimit", ev_max_current_limit),
+                ("DC_EVMaximumVoltageLimit", ev_max_voltage_limit)
+            ])
+
+            if dc_ev_charge_params.ev_maximum_power_limit:
+                ev_max_power_limit: float = dc_ev_charge_params.ev_maximum_power_limit.value * pow(
+                    10, dc_ev_charge_params.ev_maximum_power_limit.multiplier
+                )
+                # if ev_max_power_limit < 0: ev_max_power_limit = 0
+                ev_maxvalues.update(
+                    {"DC_EVMaximumPowerLimit": ev_max_power_limit})
+
+            EVEREST_CTX.publish('DC_EVMaximumLimits', ev_maxvalues)
+
+            if dc_ev_charge_params.ev_energy_capacity:
+                ev_energy_capacity: float = dc_ev_charge_params.ev_energy_capacity.value * pow(
+                    10, dc_ev_charge_params.ev_energy_capacity.multiplier
+                )
+                EVEREST_CTX.publish('DC_EVEnergyCapacity', ev_energy_capacity)
+            if ev_energy_request:
+                p_ev_energy_request: float = ev_energy_request.value * pow(
+                    10, ev_energy_request.multiplier
+                )
+                EVEREST_CTX.publish('DC_EVEnergyRequest', p_ev_energy_request)
+
+            if dc_ev_charge_params.full_soc:
+                EVEREST_CTX.publish('DC_FullSOC', dc_ev_charge_params.full_soc)
+            if dc_ev_charge_params.bulk_soc:
+                EVEREST_CTX.publish('DC_BulkSOC', dc_ev_charge_params.bulk_soc)
+
+            ev_status: dict = dict([
+                ("DC_EVReady", dc_ev_charge_params.dc_ev_status.ev_ready),
+                ("DC_EVErrorCode", dc_ev_charge_params.dc_ev_status.ev_error_code),
+                ("DC_EVRESSSOC", dc_ev_charge_params.dc_ev_status.ev_ress_soc),
+            ])
+            EVEREST_CTX.publish('DC_EVStatus', ev_status)
+            # EVerest code end #
+
+        departure_time = (
+            ev_data_context.departure_time if ev_data_context.departure_time else 0
+        )
+
+        if not departure_time:
+            departure_time = 0
+        else:
+            # EVerest code start #
+            d_Time_utc = datetime.utcnow() + timedelta(seconds=departure_time)
+            format = "%Y-%m-%dT%H:%M:%SZ"  # "yyyy-MM-dd'T'HH:mm:ss'Z'"
+            EVEREST_CTX.publish('DepartureTime', d_Time_utc.strftime(format))
+            # EVerest code end #
 
         departure_time = (
             ev_data_context.departure_time if ev_data_context.departure_time else 0
@@ -1597,7 +1827,8 @@ class ChargeParameterDiscovery(StateSECC):
             # ChargeParameterDiscoveryReq - EVCC could still request a new schedule
             # when it is on the last entry of the selected schedule.
             logger.warning(
-                f"validate_sa_schedule_list() failed. departure_time: {departure_time} "
+                f"validate_sa_schedule_list() failed. departure_time: {
+                    departure_time} "
                 f" {sa_schedule_list}"
             )
 
@@ -1624,11 +1855,14 @@ class ChargeParameterDiscovery(StateSECC):
                             ),
                         )
                         signature_key = load_priv_key(
-                            os.path.join(get_PKI_PATH(), KeyPath.MO_SUB_CA2_PEM),
+                            os.path.join(get_PKI_PATH(),
+                                         KeyPath.MO_SUB_CA2_PEM),
                             KeyEncoding.PEM,
-                            os.path.join(get_PKI_PATH(), KeyPasswordPath.MO_SUB_CA2_PASSWORD),
+                            os.path.join(get_PKI_PATH(),
+                                         KeyPasswordPath.MO_SUB_CA2_PASSWORD),
                         )
-                        signature = create_signature([element_to_sign], signature_key)
+                        signature = create_signature(
+                            [element_to_sign], signature_key)
                     except PrivateKeyReadError as exc:
                         logger.warning(
                             "Can't read private key to needed to create "
@@ -1697,7 +1931,8 @@ class ChargeParameterDiscovery(StateSECC):
             # 24 hours
             if departure_time == 0 and schedule_duration < duration_24_hours_in_seconds:
                 logger.warning(
-                    f"departure_time is not set. schedule duration {schedule_duration}"
+                    f"departure_time is not set. schedule duration {
+                        schedule_duration}"
                 )
                 logger.warning(f"Schedule tuples {schedule_tuples}")
                 valid = False
@@ -1794,7 +2029,8 @@ class PowerDelivery(StateSECC):
 
         # EVerest code start #
         if not self.comm_session.selected_charging_type_is_ac:
-            EVEREST_CTX.publish('DC_ChargingComplete', power_delivery_req.dc_ev_power_delivery_parameter.charging_complete)
+            EVEREST_CTX.publish(
+                'DC_ChargingComplete', power_delivery_req.dc_ev_power_delivery_parameter.charging_complete)
 
             ev_status: dict = dict([
                 ("DC_EVReady", power_delivery_req.dc_ev_power_delivery_parameter.dc_ev_status.ev_ready),
@@ -1803,9 +2039,10 @@ class PowerDelivery(StateSECC):
             ])
             EVEREST_CTX.publish('DC_EVStatus', ev_status)
             if power_delivery_req.dc_ev_power_delivery_parameter.bulk_charging_complete is not None:
-                EVEREST_CTX.publish('DC_BulkChargingComplete', power_delivery_req.dc_ev_power_delivery_parameter.bulk_charging_complete)
+                EVEREST_CTX.publish(
+                    'DC_BulkChargingComplete', power_delivery_req.dc_ev_power_delivery_parameter.bulk_charging_complete)
         # EVerest code end #
-            
+
         if power_delivery_req.sa_schedule_tuple_id not in [
             schedule.sa_schedule_tuple_id
             for schedule in self.comm_session.offered_schedules
@@ -1851,7 +2088,8 @@ class PowerDelivery(StateSECC):
         # message sent by the SECC.
         if power_delivery_req.charging_profile:
             if not self._is_charging_profile_valid(power_delivery_req):
-                logger.warning("[V2G2-225] ChargingProfile is not adhering to the Pmax values in ChargeParameterDiscoveryRes")
+                logger.warning(
+                    "[V2G2-225] ChargingProfile is not adhering to the Pmax values in ChargeParameterDiscoveryRes")
                 # self.stop_state_machine(
                 #     "[V2G2-225] ChargingProfile is not adhering to the Pmax values in "
                 #     "ChargeParameterDiscoveryRes",
@@ -1860,7 +2098,8 @@ class PowerDelivery(StateSECC):
                 # )
                 # return
 
-        logger.debug(f"ChargeProgress set to {power_delivery_req.charge_progress}")
+        logger.debug(f"ChargeProgress set to {
+                     power_delivery_req.charge_progress}")
 
         next_state: Type[State] = None
         if power_delivery_req.charge_progress == ChargeProgress.START:
@@ -1870,7 +2109,7 @@ class PowerDelivery(StateSECC):
                 EVEREST_CTX.publish('V2G_Setup_Finished', None)
                 self.v2GSetupFinishedReached = True
             # EVerest code end #
-            
+
             # According to section 8.7.4 in ISO 15118-2, the EV enters into HLC-C
             # (High Level Controlled Charging) once PowerDeliveryRes(ResponseCode=OK)
             # is sent with a ChargeProgress=Start
@@ -2158,7 +2397,8 @@ class MeteringReceipt(StateSECC):
     ):
         msg = self.check_msg_v2(
             message,
-            [MeteringReceiptReq, ChargingStatusReq, CurrentDemandReq, PowerDeliveryReq],
+            [MeteringReceiptReq, ChargingStatusReq,
+                CurrentDemandReq, PowerDeliveryReq],
             self.expecting_metering_receipt_req,
         )
         if not msg:
@@ -2276,7 +2516,8 @@ class SessionStop(StateSECC):
 
         self.comm_session.stop_reason = StopNotification(
             True,
-            f"EV requested to {session_stop_state.value} the communication session",
+            f"EV requested to {
+                session_stop_state.value} the communication session",
             self.comm_session.writer.get_extra_info("peername"),
             session_stop_state,
         )
@@ -2353,7 +2594,7 @@ class ChargingStatus(StateSECC):
         # EVerest code start #
         receipt_required: bool = None
         if self.comm_session.selected_auth_option == AuthEnum.EIM_V2:
-            receipt_required = False # Always false
+            receipt_required = False  # Always false
         else:
             receipt_required = await self.comm_session.evse_controller.get_receipt_required()
         # EVerest code end #
@@ -2364,7 +2605,7 @@ class ChargingStatus(StateSECC):
 
         evse_max_current = None
         if self.comm_session.selected_auth_option == AuthEnum.EIM_V2:
-            evse_max_current=await self.comm_session.evse_controller.get_ac_evse_max_current()
+            evse_max_current = await self.comm_session.evse_controller.get_ac_evse_max_current()
 
         charging_status_res = ChargingStatusRes(
             response_code=ResponseCode.OK,
@@ -2425,7 +2666,6 @@ class CableCheck(StateSECC):
     def __init__(self, comm_session: SECCCommunicationSession):
         super().__init__(comm_session, Timeouts.V2G_SECC_SEQUENCE_TIMEOUT)
         self.cable_check_started = False
-        self.contactors_closed = False
 
     async def process_message(
         self,
@@ -2462,72 +2702,48 @@ class CableCheck(StateSECC):
                 ResponseCode.FAILED,
             )
             return
-        
+
         # EVerest code start #
-        if not self.isolation_check_requested:
+        if not self.cable_check_started:
             EVEREST_CTX.publish('Start_CableCheck', None)
-            self.isolation_check_requested = True
+            self.cable_check_started = True
             await self.comm_session.evse_controller.setIsolationMonitoringActive(True)
         # EVerest code end #
-
-        next_state = None
-        evse_processing = EVSEProcessing.ONGOING
-
-        if not self.cable_check_started:
-            await self.comm_session.evse_controller.start_cable_check()
-            self.cable_check_started = True
-
-        if self.contactors_closed:
-            isolation_level = (
-                await self.comm_session.evse_controller.get_cable_check_status()
-            )  # noqa
-
-            evse_processing = EVSEProcessing.ONGOING
-            next_state = None
-            if isolation_level in [
-                IsolationLevel.VALID,
-                IsolationLevel.WARNING,
-            ]:
-                if isolation_level == IsolationLevel.WARNING:
-                    logger.warning(
-                        "Isolation resistance measured by EVSE is in Warning-Range"
-                    )
-                evse_processing = EVSEProcessing.FINISHED
-                next_state = PreCharge
-            elif isolation_level in [
-                IsolationLevel.FAULT,
-                IsolationLevel.NO_IMD,
-                IsolationLevel.INVALID,
-            ]:
-                self.stop_state_machine(
-                    f"Isolation Failure: {isolation_level}",
-                    message,
-                    ResponseCode.FAILED,
-                )
-                return
-        else:
-            # Requirement in 6.4.3.106 of the IEC 61851-23
-            # Any relays in the DC output circuit of the DC station shall
-            # be closed during the insulation test
-            # If None is returned, then contactor close operation is ongoing.
-            contactors_closed_for_cable_check = (
-                await self.comm_session.evse_controller.is_contactor_closed()
-            )
-
-            if contactors_closed_for_cable_check is not None:
-                if contactors_closed_for_cable_check:
-                    self.contactors_closed = True
-                else:
-                    self.stop_state_machine(
-                        "Contactor didnt close for Cable Check",
-                        message,
-                        ResponseCode.FAILED,
-                    )
-                    return
 
         self.comm_session.evse_controller.ev_data_context.present_soc = (
             cable_check_req.dc_ev_status.ev_ress_soc
         )
+
+        dc_charger_state = await self.comm_session.evse_controller.get_dc_evse_status()
+        cableCheckFinished = await self.comm_session.evse_controller.isCableCheckFinished()
+
+        evse_processing = EVSEProcessing.ONGOING
+        next_state = None
+        if cableCheckFinished is True and dc_charger_state.evse_isolation_status in [
+            IsolationLevel.VALID,
+            IsolationLevel.WARNING,
+        ]:
+            if dc_charger_state.evse_isolation_status == IsolationLevel.WARNING:
+                logger.warning(
+                    "Isolation resistance measured by EVSE is in Warning-Range"
+                )
+            evse_processing = EVSEProcessing.FINISHED
+            next_state = PreCharge
+            # EVerest code start #
+            await self.comm_session.evse_controller.setIsolationMonitoringActive(False)
+            # EVerest code end #
+        elif dc_charger_state.evse_isolation_status in [
+            IsolationLevel.FAULT,
+            IsolationLevel.NO_IMD,
+        ]:
+            self.stop_state_machine(
+                f"Isolation Failure: {dc_charger_state.evse_isolation_status}",
+                message,
+                ResponseCode.FAILED,
+            )
+            return
+
+        dc_charger_state = await self.comm_session.evse_controller.get_dc_evse_status()
 
         cable_check_res = CableCheckRes(
             response_code=ResponseCode.OK,
@@ -2590,9 +2806,11 @@ class PreCharge(StateSECC):
         ])
         EVEREST_CTX.publish('DC_EVStatus', ev_status)
 
-        ev_target_voltage = precharge_req.ev_target_voltage.value * pow(10, precharge_req.ev_target_voltage.multiplier)
+        ev_target_voltage = precharge_req.ev_target_voltage.value * \
+            pow(10, precharge_req.ev_target_voltage.multiplier)
         # if ev_target_voltage < 0: ev_target_voltage = 0
-        ev_target_current = precharge_req.ev_target_current.value * pow(10, precharge_req.ev_target_current.multiplier)
+        ev_target_current = precharge_req.ev_target_current.value * \
+            pow(10, precharge_req.ev_target_current.multiplier)
         # if ev_target_current < 0: ev_target_current = 0
         ev_targetvalues: dict = dict([
             ("DC_EVTargetVoltage", ev_target_voltage),
@@ -2722,6 +2940,176 @@ class CurrentDemand(StateSECC):
         ev_data_context = self.comm_session.evse_controller.ev_data_context
         ev_data_context.update_charge_loop_parameters(current_demand_req)
 
+        EVEREST_CTX.publish('DC_ChargingComplete',
+                            current_demand_req.charging_complete)
+
+        ev_status: dict = dict([
+            ("DC_EVReady", current_demand_req.dc_ev_status.ev_ready),
+            ("DC_EVErrorCode", current_demand_req.dc_ev_status.ev_error_code),
+            ("DC_EVRESSSOC", current_demand_req.dc_ev_status.ev_ress_soc),
+        ])
+        EVEREST_CTX.publish('DC_EVStatus', ev_status)
+
+        ev_target_voltage = current_demand_req.ev_target_voltage.value * \
+            pow(10, current_demand_req.ev_target_voltage.multiplier)
+        # if ev_target_voltage < 0: ev_target_voltage = 0
+        ev_target_current = current_demand_req.ev_target_current.value * \
+            pow(10, current_demand_req.ev_target_current.multiplier)
+        # if ev_target_current < 0: ev_target_current = 0
+        ev_targetvalues: dict = dict([
+            ("DC_EVTargetVoltage", ev_target_voltage),
+            ("DC_EVTargetCurrent", ev_target_current),
+        ])
+        EVEREST_CTX.publish('DC_EVTargetVoltageCurrent', ev_targetvalues)
+
+        if current_demand_req.bulk_charging_complete:
+            EVEREST_CTX.publish('DC_BulkChargingComplete',
+                                current_demand_req.bulk_charging_complete)
+
+        ev_maxvalues: dict = dict()
+
+        if current_demand_req.ev_max_current_limit:
+            ev_max_current_limit: float = current_demand_req.ev_max_current_limit.value * pow(
+                10, current_demand_req.ev_max_current_limit.multiplier
+            )
+            # if ev_max_current_limit < 0: ev_max_current_limit = 0
+            ev_maxvalues.update(
+                {"DC_EVMaximumCurrentLimit": ev_max_current_limit})
+
+        if current_demand_req.ev_max_voltage_limit:
+            ev_max_voltage_limit: float = current_demand_req.ev_max_voltage_limit.value * pow(
+                10, current_demand_req.ev_max_voltage_limit.multiplier
+            )
+            # if ev_max_voltage_limit < 0: ev_max_voltage_limit = 0
+            ev_maxvalues.update(
+                {"DC_EVMaximumVoltageLimit": ev_max_voltage_limit})
+
+        if current_demand_req.ev_max_power_limit:
+            ev_max_power_limit: float = current_demand_req.ev_max_power_limit.value * pow(
+                10, current_demand_req.ev_max_power_limit.multiplier
+            )
+            # if ev_max_power_limit < 0: ev_max_power_limit = 0
+            ev_maxvalues.update({"DC_EVMaximumPowerLimit": ev_max_power_limit})
+
+        if ev_maxvalues:
+            EVEREST_CTX.publish('DC_EVMaximumLimits', ev_maxvalues)
+
+        format = "%Y-%m-%dT%H:%M:%SZ"  # "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        datetime_now_utc = datetime.utcnow()
+
+        ev_reamingTime: dict = dict()
+
+        if current_demand_req.remaining_time_to_bulk_soc:
+            seconds_bulk_soc: float = current_demand_req.remaining_time_to_bulk_soc.value * pow(
+                10, current_demand_req.remaining_time_to_bulk_soc.multiplier
+            )
+            re_bulk_soc_time = datetime_now_utc + \
+                timedelta(seconds=seconds_bulk_soc)
+            ev_reamingTime.update(
+                {"EV_RemainingTimeToBulkSoC": re_bulk_soc_time.strftime(format)})
+
+        if current_demand_req.remaining_time_to_full_soc:
+            seconds_full_soc: float = current_demand_req.remaining_time_to_full_soc.value * pow(
+                10, current_demand_req.remaining_time_to_full_soc.multiplier
+            )
+            re_full_soc_time = datetime_now_utc + \
+                timedelta(seconds=seconds_full_soc)
+            ev_reamingTime.update(
+                {"EV_RemainingTimeToFullSoC": re_full_soc_time.strftime(format)})
+
+        if ev_reamingTime:
+            EVEREST_CTX.publish('DC_EVRemainingTime', ev_reamingTime)
+        # EVerest code end #
+
+        # EVerest code start #
+        if self.firstMessage is True:
+            EVEREST_CTX.publish('currentDemand_Started', None)
+            self.firstMessage = False
+
+        EVEREST_CTX.publish('DC_ChargingComplete',
+                            current_demand_req.charging_complete)
+
+        ev_status: dict = dict([
+            ("DC_EVReady", current_demand_req.dc_ev_status.ev_ready),
+            ("DC_EVErrorCode", current_demand_req.dc_ev_status.ev_error_code),
+            ("DC_EVRESSSOC", current_demand_req.dc_ev_status.ev_ress_soc),
+        ])
+        EVEREST_CTX.publish('DC_EVStatus', ev_status)
+
+        ev_target_voltage = current_demand_req.ev_target_voltage.value * \
+            pow(10, current_demand_req.ev_target_voltage.multiplier)
+        # if ev_target_voltage < 0: ev_target_voltage = 0
+        ev_target_current = current_demand_req.ev_target_current.value * \
+            pow(10, current_demand_req.ev_target_current.multiplier)
+        # if ev_target_current < 0: ev_target_current = 0
+        ev_targetvalues: dict = dict([
+            ("DC_EVTargetVoltage", ev_target_voltage),
+            ("DC_EVTargetCurrent", ev_target_current),
+        ])
+        EVEREST_CTX.publish('DC_EVTargetVoltageCurrent', ev_targetvalues)
+
+        if current_demand_req.bulk_charging_complete:
+            EVEREST_CTX.publish('DC_BulkChargingComplete',
+                                current_demand_req.bulk_charging_complete)
+
+        ev_maxvalues: dict = dict()
+
+        if current_demand_req.ev_max_current_limit:
+            ev_max_current_limit: float = current_demand_req.ev_max_current_limit.value * pow(
+                10, current_demand_req.ev_max_current_limit.multiplier
+            )
+            # if ev_max_current_limit < 0: ev_max_current_limit = 0
+            ev_maxvalues.update(
+                {"DC_EVMaximumCurrentLimit": ev_max_current_limit})
+
+        if current_demand_req.ev_max_voltage_limit:
+            ev_max_voltage_limit: float = current_demand_req.ev_max_voltage_limit.value * pow(
+                10, current_demand_req.ev_max_voltage_limit.multiplier
+            )
+            # if ev_max_voltage_limit < 0: ev_max_voltage_limit = 0
+            ev_maxvalues.update(
+                {"DC_EVMaximumVoltageLimit": ev_max_voltage_limit})
+
+        if current_demand_req.ev_max_power_limit:
+            ev_max_power_limit: float = current_demand_req.ev_max_power_limit.value * pow(
+                10, current_demand_req.ev_max_power_limit.multiplier
+            )
+            # if ev_max_power_limit < 0: ev_max_power_limit = 0
+            ev_maxvalues.update({"DC_EVMaximumPowerLimit": ev_max_power_limit})
+
+        if ev_maxvalues:
+            EVEREST_CTX.publish('DC_EVMaximumLimits', ev_maxvalues)
+
+        format = "%Y-%m-%dT%H:%M:%SZ"  # "yyyy-MM-dd'T'HH:mm:ss'Z'"
+        datetime_now_utc = datetime.utcnow()
+
+        ev_reamingTime: dict = dict()
+
+        if current_demand_req.remaining_time_to_bulk_soc:
+            seconds_bulk_soc: float = current_demand_req.remaining_time_to_bulk_soc.value * pow(
+                10, current_demand_req.remaining_time_to_bulk_soc.multiplier
+            )
+            re_bulk_soc_time = datetime_now_utc + \
+                timedelta(seconds=seconds_bulk_soc)
+            ev_reamingTime.update(
+                {"EV_RemainingTimeToBulkSoC": re_bulk_soc_time.strftime(format)})
+
+        if current_demand_req.remaining_time_to_full_soc:
+            seconds_full_soc: float = current_demand_req.remaining_time_to_full_soc.value * pow(
+                10, current_demand_req.remaining_time_to_full_soc.multiplier
+            )
+            re_full_soc_time = datetime_now_utc + \
+                timedelta(seconds=seconds_full_soc)
+            ev_reamingTime.update(
+                {"EV_RemainingTimeToFullSoC": re_full_soc_time.strftime(format)})
+
+        if ev_reamingTime:
+            EVEREST_CTX.publish('DC_EVRemainingTime', ev_reamingTime)
+        # EVerest code end #
+
+        ev_data_context = self.comm_session.evse_controller.ev_data_context
+        ev_data_context.update_charge_loop_parameters(current_demand_req)
+
         # Updates the power electronics targets based on EV requests
         try:
             await self.comm_session.evse_controller.send_charging_command(
@@ -2735,6 +3123,14 @@ class CurrentDemand(StateSECC):
                 ResponseCode.FAILED,
             )
             return
+
+        # EVerest code start #
+        receipt_required: bool = None
+        if self.comm_session.selected_auth_option == AuthEnum.EIM_V2:
+            receipt_required = False  # Always false
+        else:
+            receipt_required = await self.comm_session.evse_controller.get_receipt_required()
+        # EVerest code end #
 
         await self.comm_session.evse_controller.send_display_params()
 

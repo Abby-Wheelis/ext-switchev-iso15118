@@ -7,6 +7,7 @@ SessionStopRes.
 import logging
 import time
 from typing import Any, List, Union, cast
+import os
 
 from iso15118.evcc import evcc_settings
 from iso15118.evcc.comm_session_handler import EVCCCommunicationSession
@@ -1579,6 +1580,9 @@ class DCCableCheck(StateEVCC):
 
     async def build_pre_charge_message(self):
         present_voltage = await self.comm_session.ev_controller.get_present_voltage()
+        is_precharged = await self.comm_session.ev_controller.is_precharged(
+            RationalNumber(exponent=0, value=0)
+        )
         processing = Processing.ONGOING
         dc_pre_charge_req = DCPreChargeReq(
             header=MessageHeader(

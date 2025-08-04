@@ -1,17 +1,4 @@
 import os
-from typing import Optional
-
-import environs
-
-
-class SettingKey:
-    PKI_PATH = "PKI_PATH"
-    MESSAGE_LOG_JSON = "MESSAGE_LOG_JSON"
-    MESSAGE_LOG_EXI = "MESSAGE_LOG_EXI"
-    ENABLE_TLS_1_3 = "ENABLE_TLS_1_3"
-
-
-shared_settings = {}
 SHARED_CWD = os.path.dirname(os.path.abspath(__file__))
 JAR_FILE_PATH = SHARED_CWD + "/EXICodec.jar"
 

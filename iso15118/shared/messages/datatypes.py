@@ -46,23 +46,23 @@ class PhysicalValue(BaseModel):
     #     """
     #     Validator for the range of the PhysicalValue type
 
-        Raises:
-            ValueError, if the calculated value exceeds the limits set
-        """
-        value = values.get("value")
-        multiplier = values.get("multiplier")
-        calculated_value = value * 10**multiplier
-        if (
-            0 < cls._max_limit < calculated_value
-            or calculated_value < cls._min_limit < 0
-        ):
-            raise ValueError(
-                f"{cls.__name__[2:] }"  # type: ignore[attr-defined]
-                f"value limit exceeded: {calculated_value} \n"
-                f"Max: {cls._max_limit} \n"
-                f"Min: {cls._min_limit}"
-            )
-        return values
+    #     Raises:
+    #         ValueError, if the calculated value exceeds the limits set
+    #     """
+    #     value = values.get("value")
+    #     multiplier = values.get("multiplier")
+    #     calculated_value = value * 10**multiplier
+    #     if calculated_value > cls._max_limit or calculated_value < 0:
+    #         message: str = (
+    #             f"{cls.__name__[2:]} value limit exceeded: {calculated_value} \n"
+    #             f"Max: {cls._max_limit} \n"
+    #             f"Min: 0"
+    #         )
+    #         if get_ignoring_value_range():
+    #             logger.warning(message)
+    #         else:
+    #             raise ValueError(message)
+    #     return values
 
     def get_decimal_value(self) -> float:
         return self.value * 10**self.multiplier
@@ -204,6 +204,7 @@ class PVEVSEMaxCurrent(PhysicalValue):
     """
 
     """See section 9.5.2.4 in DIN SPEC 70121"""
+    _max_limit: int = 800
     unit: Literal[UnitSymbol.AMPERE] = Field(..., alias="Unit")
 
 
@@ -213,6 +214,7 @@ class PVEVSEMaxCurrentLimit(PhysicalValue):
     sets limit to 400
     """
 
+    _max_limit: int = 800
     unit: Literal[UnitSymbol.AMPERE] = Field(..., alias="Unit")
 
 

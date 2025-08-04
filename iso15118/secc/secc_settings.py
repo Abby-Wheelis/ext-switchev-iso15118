@@ -38,6 +38,15 @@ class Config:
         "EIM",
         "PNC",
     ]
+    # The SECC must support both ciphers defined in ISO 15118-20
+    # OpenSSL 1.3 supports TLS 1.3 cipher suites by default.
+    # Calling .set_ciphers to be more evident about what is available.
+    # Cipher suites for both 15118-20 and 15118-2 are provided to be compatible with
+    # both 15118 families [V2G20-2059]. The order is as specified in the
+    # specification [V2G20-1856]
+    ciphersuites: List[str] = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDH-ECDSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256"
+
+    verify_contract_cert_chain = False
     env_dump: Optional[dict] = None
 
     def load_envs(self, env_path: Optional[str] = None) -> None:
