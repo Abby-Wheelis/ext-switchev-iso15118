@@ -114,6 +114,19 @@ class EVCCCommunicationSession(V2GCommunicationSession):
         # Once the timer is up, the EV will terminate the communication session.
         # A value >= 0 means the timer is running, a value < 0 means it stopped.
         self.ongoing_timer: float = -1
+        # The Charge timer (in seconds) starts running once the EVCC
+        # receives a PowerDeliveryRes with EVSEProcessing set to 'Finished'.
+        # This timer counts up during a charge session, recording the duration.
+        # When a charge session is paused or stopped, the timer is reset.
+        # A value >= 0 means the timer is running, a value < 0 means it stopped.
+        self.charging_session_timer: float = -1
+        # The end of profile schedule marks the final departure time within
+        # the profile_entry_schedule created for a PowerDeliveryReq. This
+        # value, is used to mark when the 24 entry schedule has terminated.
+        # See ISO 15118-2 Subclause 8.5.2.10 for details
+        self.end_of_profile_schedule: int= -1
+        self.sim_speed: int = -1
+        self.departure_time: int = -1
         # Temporarily save the ScheduleExchangeReq, which need to be resent to the SECC
         # if the response message's EVSEProcessing field is set to "Ongoing"
         self.ongoing_schedule_exchange_req: Optional[ScheduleExchangeReq] = None
@@ -263,6 +276,7 @@ class EVCCCommunicationSession(V2GCommunicationSession):
         evcc_settings.ev_session_context.session_id = self.session_id
         evcc_settings.ev_session_context.selected_auth_option = self.selected_auth_option
         evcc_settings.ev_session_context.requested_energy_mode = self.selected_energy_mode
+        evcc_settings.ev_session_context.selected_energy_service = self.selected_energy_service
 
 class CommunicationSessionHandler:
     """
